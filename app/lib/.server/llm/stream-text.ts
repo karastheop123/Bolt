@@ -15,7 +15,7 @@ interface ToolResult<Name extends string, Args, Result> {
 
 interface Message {
   role: 'user' | 'assistant';
-  content: string;
+  content: string | Array<{ type: string; text?: string; image?: string }>;
   toolInvocations?: ToolResult<string, unknown, unknown>[];
   model?: string;
 }
@@ -24,7 +24,7 @@ export type Messages = Message[];
 
 export type StreamingOptions = Omit<Parameters<typeof _streamText>[0], 'model'>;
 
-function extractPropertiesFromMessage(message: Message): { model: string; provider: string; content: string } {
+function extractPropertiesFromMessage(message: Message): { model: string; provider: string; content: string | Array<{ type: string; text?: string; image?: string }> } {
   const textContent = Array.isArray(message.content)
     ? message.content.find((item) => item.type === 'text')?.text || ''
     : message.content;
@@ -32,16 +32,7 @@ function extractPropertiesFromMessage(message: Message): { model: string; provid
   const modelMatch = textContent.match(MODEL_REGEX);
   const providerMatch = textContent.match(PROVIDER_REGEX);
 
-  /*
-   * Extract model
-   * const modelMatch = message.content.match(MODEL_REGEX);
-   */
   const model = modelMatch ? modelMatch[1] : DEFAULT_MODEL;
-
-  /*
-   * Extract provider
-   * const providerMatch = message.content.match(PROVIDER_REGEX);
-   */
   const provider = providerMatch ? providerMatch[1] : DEFAULT_PROVIDER.name;
 
   const cleanedContent = Array.isArray(message.content)
@@ -53,7 +44,7 @@ function extractPropertiesFromMessage(message: Message): { model: string; provid
           };
         }
 
-        return item; // Preserve image_url and other types as is
+        return item;
       })
     : textContent.replace(MODEL_REGEX, '').replace(PROVIDER_REGEX, '');
 
@@ -62,15 +53,16 @@ function extractPropertiesFromMessage(message: Message): { model: string; provid
 
 export async function streamText(props: {
   messages: Messages;
-  env: Env;
+  env?: Record<string, string | undefined>;
   options?: StreamingOptions;
   apiKeys?: Record<string, string>;
   providerSettings?: Record<string, IProviderSetting>;
 }) {
-  const { messages, env, options, apiKeys, providerSettings } = props;
+  const { messages, env = process.env, options, apiKeys, providerSettings } = props;
   let currentModel = DEFAULT_MODEL;
   let currentProvider = DEFAULT_PROVIDER.name;
   const MODEL_LIST = await getModelList(apiKeys || {}, providerSettings);
+  
   const processedMessages = messages.map((message) => {
     if (message.role === 'user') {
       const { model, provider, content } = extractPropertiesFromMessage(message);
@@ -95,10 +87,10 @@ export async function streamText(props: {
   const dynamicMaxTokens = modelDetails && modelDetails.maxTokenAllowed ? modelDetails.maxTokenAllowed : MAX_TOKENS;
 
   return _streamText({
-    model: getModel(currentProvider, currentModel, env, apiKeys, providerSettings) as any,
+    model: getModel(currentProvider, currentModel, env as Record<string, string | undefined>, apiKeys, providerSettings) as Parameters<typeof _streamText>[0]['model'],
     system: getSystemPrompt(undefined, currentModel, modelDetails),
     maxTokens: dynamicMaxTokens,
-    messages: convertToCoreMessages(trimmedMessages as any),
+    messages: convertToCoreMessages(trimmedMessages as Parameters<typeof convertToCoreMessages>[0]),
     ...options,
   });
 }

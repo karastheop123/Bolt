@@ -1,27 +1,21 @@
-import { type ActionFunctionArgs } from '@remix-run/cloudflare';
-import { StreamingTextResponse, parseStreamPart } from 'ai';
+import { type ActionFunctionArgs } from '@remix-run/node';
 import { streamText } from '~/lib/.server/llm/stream-text';
 import { stripIndents } from '~/utils/stripIndent';
 import type { IProviderSetting, ProviderInfo } from '~/types/model';
-
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 
 export async function action(args: ActionFunctionArgs) {
   return enhancerAction(args);
 }
 
 function parseCookies(cookieHeader: string) {
-  const cookies: any = {};
+  const cookies: Record<string, string> = {};
 
-  // Split the cookie string by semicolons and spaces
   const items = cookieHeader.split(';').map((cookie) => cookie.trim());
 
   items.forEach((item) => {
     const [name, ...rest] = item.split('=');
 
     if (name && rest) {
-      // Decode the name and value, and join value parts in case it contains '='
       const decodedName = decodeURIComponent(name.trim());
       const decodedValue = decodeURIComponent(rest.join('=').trim());
       cookies[decodedName] = decodedValue;
@@ -31,7 +25,7 @@ function parseCookies(cookieHeader: string) {
   return cookies;
 }
 
-async function enhancerAction({ context, request }: ActionFunctionArgs) {
+async function enhancerAction({ request }: ActionFunctionArgs) {
   const { message, model, provider } = await request.json<{
     message: string;
     model: string;
@@ -41,7 +35,6 @@ async function enhancerAction({ context, request }: ActionFunctionArgs) {
 
   const { name: providerName } = provider;
 
-  // validate 'model' and 'provider' fields
   if (!model || typeof model !== 'string') {
     throw new Response('Invalid or missing model', {
       status: 400,
@@ -58,7 +51,6 @@ async function enhancerAction({ context, request }: ActionFunctionArgs) {
 
   const cookieHeader = request.headers.get('Cookie');
 
-  // Parse the cookie's value (returns an object or null if no cookie exists)
   const apiKeys = JSON.parse(parseCookies(cookieHeader || '').apiKeys || '{}');
   const providerSettings: Record<string, IProviderSetting> = JSON.parse(
     parseCookies(cookieHeader || '').providers || '{}',
@@ -101,34 +93,17 @@ async function enhancerAction({ context, request }: ActionFunctionArgs) {
         `,
         },
       ],
-      env: context.cloudflare.env,
+      env: process.env as Record<string, string | undefined>,
       apiKeys,
       providerSettings,
     });
 
-    const transformStream = new TransformStream({
-      transform(chunk, controller) {
-        const text = decoder.decode(chunk);
-        const lines = text.split('\n').filter((line) => line.trim() !== '');
-
-        for (const line of lines) {
-          try {
-            const parsed = parseStreamPart(line);
-
-            if (parsed.type === 'text') {
-              controller.enqueue(encoder.encode(parsed.value));
-            }
-          } catch (e) {
-            // skip invalid JSON lines
-            console.warn('Failed to parse stream part:', line, e);
-          }
-        }
+    return new Response(result.toAIStream(), {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
       },
     });
-
-    const transformedStream = result.toDataStream().pipeThrough(transformStream);
-
-    return new StreamingTextResponse(transformedStream);
   } catch (error: unknown) {
     console.log(error);
 

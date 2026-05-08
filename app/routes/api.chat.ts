@@ -1,4 +1,4 @@
-import { type ActionFunctionArgs } from '@remix-run/cloudflare';
+import { type ActionFunctionArgs } from '@remix-run/node';
 import { MAX_RESPONSE_SEGMENTS, MAX_TOKENS } from '~/lib/.server/llm/constants';
 import { CONTINUE_PROMPT } from '~/lib/.server/llm/prompts';
 import { streamText, type Messages, type StreamingOptions } from '~/lib/.server/llm/stream-text';
@@ -10,16 +10,14 @@ export async function action(args: ActionFunctionArgs) {
 }
 
 function parseCookies(cookieHeader: string) {
-  const cookies: any = {};
+  const cookies: Record<string, string> = {};
 
-  // Split the cookie string by semicolons and spaces
   const items = cookieHeader.split(';').map((cookie) => cookie.trim());
 
   items.forEach((item) => {
     const [name, ...rest] = item.split('=');
 
     if (name && rest) {
-      // Decode the name and value, and join value parts in case it contains '='
       const decodedName = decodeURIComponent(name.trim());
       const decodedValue = decodeURIComponent(rest.join('=').trim());
       cookies[decodedName] = decodedValue;
@@ -29,7 +27,7 @@ function parseCookies(cookieHeader: string) {
   return cookies;
 }
 
-async function chatAction({ context, request }: ActionFunctionArgs) {
+async function chatAction({ request }: ActionFunctionArgs) {
   const { messages } = await request.json<{
     messages: Messages;
     model: string;
@@ -37,7 +35,6 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
 
   const cookieHeader = request.headers.get('Cookie');
 
-  // Parse the cookie's value (returns an object or null if no cookie exists)
   const apiKeys = JSON.parse(parseCookies(cookieHeader || '').apiKeys || '{}');
   const providerSettings: Record<string, IProviderSetting> = JSON.parse(
     parseCookies(cookieHeader || '').providers || '{}',
@@ -64,26 +61,38 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
         messages.push({ role: 'assistant', content });
         messages.push({ role: 'user', content: CONTINUE_PROMPT });
 
-        const result = await streamText({ messages, env: context.cloudflare.env, options, apiKeys, providerSettings });
+        const result = await streamText({ 
+          messages, 
+          env: process.env as Record<string, string | undefined>, 
+          options, 
+          apiKeys, 
+          providerSettings 
+        });
 
         return stream.switchSource(result.toAIStream());
       },
     };
 
-    const result = await streamText({ messages, env: context.cloudflare.env, options, apiKeys, providerSettings });
+    const result = await streamText({ 
+      messages, 
+      env: process.env as Record<string, string | undefined>, 
+      options, 
+      apiKeys, 
+      providerSettings 
+    });
 
-    stream.switchSource(result.toAIStream());
+    stream.switchSource(result.toDataStream());
 
     return new Response(stream.readable, {
       status: 200,
       headers: {
-        contentType: 'text/plain; charset=utf-8',
+        'Content-Type': 'text/plain; charset=utf-8',
       },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.log(error);
 
-    if (error.message?.includes('API key')) {
+    if (error instanceof Error && error.message?.includes('API key')) {
       throw new Response('Invalid or missing API key', {
         status: 401,
         statusText: 'Unauthorized',
